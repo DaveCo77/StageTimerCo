@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>TimerCo Master Control | Pixel Array</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&family=Inter:wght@400;600;900&display=swap');
+
+        :root {
+            --brand-bg: #000000;
+            --brand-panel: #0b0b0b;
+            --brand-raised: #1a1a1a;
+            --line-strong: rgba(255, 255, 255, 0.1);
+            --marker: #3b82f6; /* Blue for TimerCo */
+            
+            /* Timer States */
+            --time-running: #ffffff;
+            --time-warning: #eab308;
+            --time-overtime: #ef4444;
+            --time-paused: #64748b;
+        }
+
+        body { 
+            background-color: var(--brand-bg); 
+            color: #e2e8f0; 
+            font-family: 'Inter', sans-serif;
+        }
+        
+        .panel-raised { 
+            background-color: var(--brand-raised); 
+            border: 1px solid var(--line-strong); 
+        }
+
+        /* Forces the timer to use monospace so numbers don't jump around */
+        .font-tech {
+            font-family: 'JetBrains Mono', monospace;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Stage Display Glow Effects */
+        .stage-display {
+            transition: all 0.3s ease;
+        }
+        .state-running { color: var(--time-running); text-shadow: 0 0 40px rgba(255,255,255,0.1); }
+        .state-warning { color: var(--time-warning); text-shadow: 0 0 60px rgba(234,179,8,0.2); }
+        .state-overtime { color: var(--time-overtime); text-shadow: 0 0 60px rgba(239,68,68,0.4); animation: pulse-red 2s infinite; }
+        .state-paused { color: var(--time-paused); }
+
+        @keyframes pulse-red {
+            0%, 100% { background-color: #050505; }
+            50% { background-color: #1a0505; }
+        }
+
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    </style>
+</head>
+<body id="app" class="h-screen flex flex-col overflow-hidden">
+
+    <!-- HEADER -->
+    <header class="border-b px-8 py-4 flex justify-between items-center z-10 shadow-lg" style="background-color: var(--brand-panel); border-color: var(--line-strong);">
+        <div class="flex items-center gap-4">
+            <div class="w-3 h-3 rounded-full bg-blue-500 shadow-[0_0_10px_#3b82f6]"></div>
+            <h1 class="text-2xl font-black tracking-widest uppercase">
+                <span class="text-white">Timer</span><span style="color: var(--marker);">Co</span> // Control
+            </h1>
+        </div>
+        <div class="flex items-center gap-4">
+            <div class="text-xs font-tech text-slate-500 bg-black px-4 py-2 rounded border border-white/10 flex items-center gap-2">
+                LOCAL ENGINE <span class="w-2 h-2 rounded-full bg-emerald-500 block animate-pulse"></span>
+            </div>
+        </div>
+    </header>
+
+    <!-- MAIN GRID -->
+    <main class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 p-6 overflow-hidden">
+        
+        <!-- LEFT: CONTROLS (5 Cols) -->
+        <div class="lg:col-span-5 flex flex-col gap-6 overflow-y-auto pr-2 pb-10">
+            
+            <!-- MASTER PLAYBACK -->
+            <section class="panel-raised p-6 rounded-xl shadow-xl">
+                <h2 class="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4 border-b border-white/10 pb-2">Playback Control</h2>
+                <div class="grid grid-cols-2 gap-3 mb-3">
+                    <button @click="startTimer" :disabled="status === 'running'" 
+                            :class="status === 'running' ? 'opacity-50 cursor-not-allowed bg-emerald-900/30 text-emerald-700' : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-[0_0_15px_rgba(16,185,129,0.2)]'" 
+                            class="py-4 rounded font-black tracking-wider text-sm transition-all uppercase">
+                        Start / Resume
+                    </button>
+                    <button @click="pauseTimer" :disabled="status !== 'running'"
+                            :class="status !== 'running' ? 'opacity-50 cursor-not-allowed bg-slate-800 text-slate-600' : 'bg-yellow-600 hover:bg-yellow-500 text-white shadow-[0_0_15px_rgba(234,179,8,0.2)]'"
+                            class="py-4 rounded font-black tracking-wider text-sm transition-all uppercase">
+                        Pause
+                    </button>
+                </div>
+                <button @click="resetTimer" class="w-full py-3 bg-black border border-white/10 hover:bg-red-950/40 hover:text-red-400 hover:border-red-900/50 text-slate-400 rounded font-bold tracking-wider text-xs transition-all uppercase">
+                    Hard Reset to Zero
+                </button>
+            </section>
+
+            <!-- TIME ADJUSTMENTS -->
+            <section class="panel-raised p-6 rounded-xl shadow-xl">
+                <h2 class="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4 border-b border-white/10 pb-2">Time Adjustments (Live)</h2>
+                
+                <p class="text-[10px] text-slate-500 font-tech uppercase mb-2">Add / Subtract Time</p>
+                <div class="grid grid-cols-4 gap-2 mb-6">
+                    <button @click="adjustTime(-60)" class="py-2 bg-black border border-white/10 hover:bg-slate-800 rounded font-tech text-sm transition-colors text-slate-300">-1m</button>
+                    <button @click="adjustTime(60)" class="py-2 bg-black border border-white/10 hover:bg-slate-800 rounded font-tech text-sm transition-colors text-slate-300">+1m</button>
+                    <button @click="adjustTime(300)" class="py-2 bg-black border border-white/10 hover:bg-slate-800 rounded font-tech text-sm transition-colors text-slate-300">+5m</button>
+                    <button @click="adjustTime(600)" class="py-2 bg-black border border-white/10 hover:bg-slate-800 rounded font-tech text-sm transition-colors text-slate-300">+10m</button>
+                </div>
+
+                <p class="text-[10px] text-slate-500 font-tech uppercase mb-2">Quick Presets (Overwrites Current)</p>
+                <div class="grid grid-cols-3 gap-2">
+                    <button @click="setPreset(300)" class="py-3 bg-slate-800 hover:bg-blue-600 hover:text-white rounded font-tech font-bold text-sm transition-colors text-slate-400">5:00</button>
+                    <button @click="setPreset(900)" class="py-3 bg-slate-800 hover:bg-blue-600 hover:text-white rounded font-tech font-bold text-sm transition-colors text-slate-400">15:00</button>
+                    <button @click="setPreset(2700)" class="py-3 bg-slate-800 hover:bg-blue-600 hover:text-white rounded font-tech font-bold text-sm transition-colors text-slate-400">45:00</button>
+                </div>
+            </section>
+
+            <!-- PRESENTER MESSAGING -->
+            <section class="panel-raised p-6 rounded-xl shadow-xl flex-1">
+                <h2 class="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4 border-b border-white/10 pb-2">On-Stage Prompts</h2>
+                <div class="flex flex-col gap-3">
+                    <input type="text" v-model="speakerName" placeholder="Speaker Name (e.g. Dr. Jane Smith)" 
+                           class="w-full bg-[#050505] border border-white/10 rounded px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-500 transition-colors">
+                    
+                    <div class="relative mt-2">
+                        <textarea v-model="draftMessage" rows="3" placeholder="Type a message to flash on the confidence monitor..." 
+                                  class="w-full bg-[#050505] border border-white/10 rounded px-4 py-3 text-sm text-white focus:outline-none focus:border-yellow-500 transition-colors resize-none"></textarea>
+                        <button @click="flashMessage" :class="draftMessage ? 'bg-yellow-600 hover:bg-yellow-500 text-white' : 'bg-slate-800 text-slate-600 cursor-not-allowed'"
+                                class="absolute bottom-3 right-3 px-4 py-1.5 rounded font-bold uppercase tracking-wider text-[10px] transition-colors">
+                            Flash to Stage
+                        </button>
+                    </div>
+                    <button v-if="activeMessage" @click="clearMessage" class="mt-1 text-xs text-red-400 hover:text-red-300 text-right uppercase tracking-wider font-bold">
+                        ✕ Clear Active Message
+                    </button>
+                </div>
+            </section>
+        </div>
+
+        <!-- RIGHT: STAGE DISPLAY PREVIEW (7 Cols) -->
+        <div class="lg:col-span-7 flex flex-col h-full">
+            <div class="bg-black/50 px-6 py-3 border-t border-l border-r border-white/10 rounded-t-xl flex justify-between items-center" style="border-color: var(--line-strong);">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                    <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                    Downstage Monitor (DSM) Preview
+                </h2>
+                
+                <!-- NEW COPY LINK BUTTON -->
+                <button @click="copyDsmLink" class="text-[10px] bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded tracking-wider font-bold transition-colors flex items-center gap-2 shadow-[0_0_10px_rgba(59,130,246,0.3)]">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                    {{ copyText }}
+                </button>
+            </div>
+            
+            <!-- THE ACTUAL TIMER DISPLAY -->
+            <div class="panel-raised rounded-b-xl shadow-2xl flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden stage-display"
+                 :class="[
+                    status === 'running' && remainingSeconds <= 0 ? 'state-overtime' : '',
+                    status === 'running' && remainingSeconds > 0 && remainingSeconds <= 60 ? 'state-warning' : '',
+                    status === 'running' && remainingSeconds > 60 ? 'state-running' : '',
+                    status === 'paused' || status === 'stopped' ? 'state-paused' : ''
+                 ]">
+                
+                <!-- Speaker Name -->
+                <div class="absolute top-12 text-3xl font-black tracking-widest uppercase opacity-80" style="color: inherit;">
+                    {{ speakerName || 'SESSION TIMER' }}
+                </div>
+
+                <!-- Main Time (Negative formatting logic applied) -->
+                <div class="text-[12vw] font-tech font-bold leading-none tracking-tighter" style="color: inherit;">
+                    {{ formattedTime }}
+                </div>
+
+                <!-- Flashing Message -->
+                <div v-if="activeMessage" class="absolute bottom-16 bg-yellow-500 text-black px-8 py-4 rounded-xl text-4xl font-black uppercase tracking-wider shadow-[0_0_30px_rgba(234,179,8,0.5)] animate-bounce">
+                    {{ activeMessage }}
+                </div>
+
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const { createApp, ref, computed, onMounted, onUnmounted } = Vue;
+
+        createApp({
+            setup() {
+                // Core State
+                const status = ref('stopped'); // 'stopped', 'running', 'paused'
+                const targetTimestamp = ref(0); 
+                const pausedRemaining = ref(0); // Holds time when paused
+                const now = ref(Date.now());
+                
+                // Content State
+                const speakerName = ref('');
+                const draftMessage = ref('');
+                const activeMessage = ref('');
+                
+                // Copy Link State
+                const copyText = ref('COPY DSM LINK');
+                
+                let ticker = null;
+
+                // --- THE CORE LOGIC ---
+                // Calculate remaining seconds cleanly
+                const remainingSeconds = computed(() => {
+                    if (status.value === 'stopped') return 0;
+                    if (status.value === 'paused') return pausedRemaining.value;
+                    return Math.ceil((targetTimestamp.value - now.value) / 1000);
+                });
+
+                // Format the clock (handles negatives for overtime automatically)
+                const formattedTime = computed(() => {
+                    const totalSecs = remainingSeconds.value;
+                    const isNegative = totalSecs < 0;
+                    const absSecs = Math.abs(totalSecs);
+                    
+                    const hours = Math.floor(absSecs / 3600);
+                    const minutes = Math.floor((absSecs % 3600) / 60);
+                    const seconds = absSecs % 60;
+
+                    let timeStr = '';
+                    if (hours > 0) {
+                        timeStr = `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                    } else {
+                        timeStr = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                    }
+
+                    return isNegative ? `-${timeStr}` : timeStr;
+                });
+
+                // --- CONTROLS ---
+                const startTimer = () => {
+                    if (status.value === 'running') return;
+                    
+                    if (status.value === 'paused') {
+                        // Resume from where we left off
+                        targetTimestamp.value = Date.now() + (pausedRemaining.value * 1000);
+                    } else if (targetTimestamp.value === 0) {
+                        // Default to 5 mins if started from dead zero
+                        targetTimestamp.value = Date.now() + (300 * 1000);
+                    }
+                    
+                    status.value = 'running';
+                };
+
+                const pauseTimer = () => {
+                    if (status.value !== 'running') return;
+                    pausedRemaining.value = remainingSeconds.value;
+                    status.value = 'paused';
+                };
+
+                const resetTimer = () => {
+                    status.value = 'stopped';
+                    targetTimestamp.value = 0;
+                    pausedRemaining.value = 0;
+                };
+
+                const adjustTime = (secondsToAdd) => {
+                    if (status.value === 'running') {
+                        targetTimestamp.value += (secondsToAdd * 1000);
+                    } else {
+                        // If paused or stopped, add to the pending pool
+                        const current = status.value === 'paused' ? pausedRemaining.value : 0;
+                        pausedRemaining.value = Math.max(0, current + secondsToAdd);
+                        status.value = 'paused'; 
+                    }
+                };
+
+                const setPreset = (totalSeconds) => {
+                    if (status.value === 'running') {
+                        targetTimestamp.value = Date.now() + (totalSeconds * 1000);
+                    } else {
+                        pausedRemaining.value = totalSeconds;
+                        status.value = 'paused';
+                    }
+                };
+
+                const flashMessage = () => {
+                    if (!draftMessage.value.trim()) return;
+                    activeMessage.value = draftMessage.value;
+                    draftMessage.value = '';
+                };
+
+                const clearMessage = () => {
+                    activeMessage.value = '';
+                };
+
+                const copyDsmLink = () => {
+                    // This will eventually use your dynamic event ID just like SignalCo
+                    const stagingUrl = "https://daveco77.github.io/TimerCo/dsm.html?event=demo_sandbox";
+                    
+                    navigator.clipboard.writeText(stagingUrl).then(() => {
+                        copyText.value = 'COPIED!';
+                        setTimeout(() => {
+                            copyText.value = 'COPY DSM LINK';
+                        }, 2000);
+                    });
+                };
+
+                // The master loop updating the local time
+                onMounted(() => {
+                    ticker = setInterval(() => {
+                        now.value = Date.now();
+                    }, 100); // 100ms refresh ensures UI never skips a beat visually
+                });
+
+                onUnmounted(() => {
+                    clearInterval(ticker);
+                });
+
+                return {
+                    status, speakerName, draftMessage, activeMessage,
+                    remainingSeconds, formattedTime, copyText,
+                    startTimer, pauseTimer, resetTimer, adjustTime, setPreset,
+                    flashMessage, clearMessage, copyDsmLink
+                }
+            }
+        }).mount('#app')
+    </script>
+</body>
+</html>
