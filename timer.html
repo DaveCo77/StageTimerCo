@@ -57,6 +57,10 @@
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
     </style>
+
+    <!-- Firebase v8 -->
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
 </head>
 <body id="app" class="h-screen flex flex-col overflow-hidden">
 
@@ -186,143 +190,163 @@
         </div>
     </main>
 
-    <script>
-        const { createApp, ref, computed, onMounted, onUnmounted } = Vue;
+<script>
+    // --- 1. INITIALIZE FIREBASE ---
+    const firebaseConfig = {
+        apiKey: "YOUR_API_KEY",
+        authDomain: "YOUR_DOMAIN.firebaseapp.com",
+        databaseURL: "https://YOUR_DATABASE_NAME.firebaseio.com",
+        projectId: "YOUR_PROJECT_ID",
+    };
+    if (!firebase.apps.length) {
+        firebase.initializeApp(firebaseConfig);
+    }
+    const db = firebase.database();
 
-        createApp({
-            setup() {
-                // Core State
-                const status = ref('stopped'); // 'stopped', 'running', 'paused'
-                const targetTimestamp = ref(0); 
-                const pausedRemaining = ref(0); // Holds time when paused
-                const now = ref(Date.now());
+    // --- 2. GET DYNAMIC EVENT ID ---
+    const urlParams = new URLSearchParams(window.location.search);
+    const eventId = urlParams.get('event') || 'demo_sandbox';
+    const timerRef = db.ref('timers/' + eventId);
+
+    const { createApp, ref, computed, onMounted, onUnmounted, watch } = Vue;
+
+    createApp({
+        setup() {
+            const status = ref('stopped'); 
+            const targetTimestamp = ref(0); 
+            const pausedRemaining = ref(0); 
+            const now = ref(Date.now());
+            
+            const speakerName = ref('');
+            const draftMessage = ref('');
+            const activeMessage = ref('');
+            
+            const copyText = ref('COPY DSM LINK');
+            let ticker = null;
+
+            // --- THE SYNC ENGINE ---
+            // This blasts the current state to the cloud
+            const syncToCloud = () => {
+                timerRef.set({
+                    status: status.value,
+                    targetTimestamp: targetTimestamp.value,
+                    pausedRemaining: pausedRemaining.value,
+                    speakerName: speakerName.value,
+                    activeMessage: activeMessage.value
+                });
+            };
+
+            // Watch for changes in the speaker name and sync automatically
+            watch(speakerName, () => { syncToCloud(); });
+
+            const remainingSeconds = computed(() => {
+                if (status.value === 'stopped') return 0;
+                if (status.value === 'paused') return pausedRemaining.value;
+                return Math.ceil((targetTimestamp.value - now.value) / 1000);
+            });
+
+            const formattedTime = computed(() => {
+                const totalSecs = remainingSeconds.value;
+                const isNegative = totalSecs < 0;
+                const absSecs = Math.abs(totalSecs);
                 
-                // Content State
-                const speakerName = ref('');
-                const draftMessage = ref('');
-                const activeMessage = ref('');
-                
-                // Copy Link State
-                const copyText = ref('COPY DSM LINK');
-                
-                let ticker = null;
+                const hours = Math.floor(absSecs / 3600);
+                const minutes = Math.floor((absSecs % 3600) / 60);
+                const seconds = absSecs % 60;
 
-                // --- THE CORE LOGIC ---
-                // Calculate remaining seconds cleanly
-                const remainingSeconds = computed(() => {
-                    if (status.value === 'stopped') return 0;
-                    if (status.value === 'paused') return pausedRemaining.value;
-                    return Math.ceil((targetTimestamp.value - now.value) / 1000);
-                });
+                let timeStr = hours > 0 
+                    ? `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+                    : `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
-                // Format the clock (handles negatives for overtime automatically)
-                const formattedTime = computed(() => {
-                    const totalSecs = remainingSeconds.value;
-                    const isNegative = totalSecs < 0;
-                    const absSecs = Math.abs(totalSecs);
-                    
-                    const hours = Math.floor(absSecs / 3600);
-                    const minutes = Math.floor((absSecs % 3600) / 60);
-                    const seconds = absSecs % 60;
+                return isNegative ? `-${timeStr}` : timeStr;
+            });
 
-                    let timeStr = '';
-                    if (hours > 0) {
-                        timeStr = `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-                    } else {
-                        timeStr = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-                    }
-
-                    return isNegative ? `-${timeStr}` : timeStr;
-                });
-
-                // --- CONTROLS ---
-                const startTimer = () => {
-                    if (status.value === 'running') return;
-                    
-                    if (status.value === 'paused') {
-                        // Resume from where we left off
-                        targetTimestamp.value = Date.now() + (pausedRemaining.value * 1000);
-                    } else if (targetTimestamp.value === 0) {
-                        // Default to 5 mins if started from dead zero
-                        targetTimestamp.value = Date.now() + (300 * 1000);
-                    }
-                    
-                    status.value = 'running';
-                };
-
-                const pauseTimer = () => {
-                    if (status.value !== 'running') return;
-                    pausedRemaining.value = remainingSeconds.value;
-                    status.value = 'paused';
-                };
-
-                const resetTimer = () => {
-                    status.value = 'stopped';
-                    targetTimestamp.value = 0;
-                    pausedRemaining.value = 0;
-                };
-
-                const adjustTime = (secondsToAdd) => {
-                    if (status.value === 'running') {
-                        targetTimestamp.value += (secondsToAdd * 1000);
-                    } else {
-                        // If paused or stopped, add to the pending pool
-                        const current = status.value === 'paused' ? pausedRemaining.value : 0;
-                        pausedRemaining.value = Math.max(0, current + secondsToAdd);
-                        status.value = 'paused'; 
-                    }
-                };
-
-                const setPreset = (totalSeconds) => {
-                    if (status.value === 'running') {
-                        targetTimestamp.value = Date.now() + (totalSeconds * 1000);
-                    } else {
-                        pausedRemaining.value = totalSeconds;
-                        status.value = 'paused';
-                    }
-                };
-
-                const flashMessage = () => {
-                    if (!draftMessage.value.trim()) return;
-                    activeMessage.value = draftMessage.value;
-                    draftMessage.value = '';
-                };
-
-                const clearMessage = () => {
-                    activeMessage.value = '';
-                };
-
-                const copyDsmLink = () => {
-                    // This will eventually use your dynamic event ID just like SignalCo
-                    const stagingUrl = "https://daveco77.github.io/TimerCo/dsm.html?event=demo_sandbox";
-                    
-                    navigator.clipboard.writeText(stagingUrl).then(() => {
-                        copyText.value = 'COPIED!';
-                        setTimeout(() => {
-                            copyText.value = 'COPY DSM LINK';
-                        }, 2000);
-                    });
-                };
-
-                // The master loop updating the local time
-                onMounted(() => {
-                    ticker = setInterval(() => {
-                        now.value = Date.now();
-                    }, 100); // 100ms refresh ensures UI never skips a beat visually
-                });
-
-                onUnmounted(() => {
-                    clearInterval(ticker);
-                });
-
-                return {
-                    status, speakerName, draftMessage, activeMessage,
-                    remainingSeconds, formattedTime, copyText,
-                    startTimer, pauseTimer, resetTimer, adjustTime, setPreset,
-                    flashMessage, clearMessage, copyDsmLink
+            // --- CONTROLS (Updated with syncToCloud) ---
+            const startTimer = () => {
+                if (status.value === 'running') return;
+                if (status.value === 'paused') {
+                    targetTimestamp.value = Date.now() + (pausedRemaining.value * 1000);
+                } else if (targetTimestamp.value === 0) {
+                    targetTimestamp.value = Date.now() + (300 * 1000);
                 }
+                status.value = 'running';
+                syncToCloud();
+            };
+
+            const pauseTimer = () => {
+                if (status.value !== 'running') return;
+                pausedRemaining.value = remainingSeconds.value;
+                status.value = 'paused';
+                syncToCloud();
+            };
+
+            const resetTimer = () => {
+                status.value = 'stopped';
+                targetTimestamp.value = 0;
+                pausedRemaining.value = 0;
+                syncToCloud();
+            };
+
+            const adjustTime = (secondsToAdd) => {
+                if (status.value === 'running') {
+                    targetTimestamp.value += (secondsToAdd * 1000);
+                } else {
+                    const current = status.value === 'paused' ? pausedRemaining.value : 0;
+                    pausedRemaining.value = Math.max(0, current + secondsToAdd);
+                    status.value = 'paused'; 
+                }
+                syncToCloud();
+            };
+
+            const setPreset = (totalSeconds) => {
+                if (status.value === 'running') {
+                    targetTimestamp.value = Date.now() + (totalSeconds * 1000);
+                } else {
+                    pausedRemaining.value = totalSeconds;
+                    status.value = 'paused';
+                }
+                syncToCloud();
+            };
+
+            const flashMessage = () => {
+                if (!draftMessage.value.trim()) return;
+                activeMessage.value = draftMessage.value;
+                draftMessage.value = '';
+                syncToCloud();
+            };
+
+            const clearMessage = () => {
+                activeMessage.value = '';
+                syncToCloud();
+            };
+
+            const copyDsmLink = () => {
+                // Dynamically grabs the current domain and event ID
+                const currentDomain = window.location.origin + window.location.pathname.replace('timer.html', '');
+                const stagingUrl = `${currentDomain}dsm.html?event=${eventId}`;
+                
+                navigator.clipboard.writeText(stagingUrl).then(() => {
+                    copyText.value = 'COPIED!';
+                    setTimeout(() => { copyText.value = 'COPY DSM LINK'; }, 2000);
+                });
+            };
+
+            onMounted(() => {
+                // Ensure a clean slate in the DB when the master boots up
+                syncToCloud();
+                ticker = setInterval(() => { now.value = Date.now(); }, 100);
+            });
+
+            onUnmounted(() => { clearInterval(ticker); });
+
+            return {
+                status, speakerName, draftMessage, activeMessage,
+                remainingSeconds, formattedTime, copyText,
+                startTimer, pauseTimer, resetTimer, adjustTime, setPreset,
+                flashMessage, clearMessage, copyDsmLink
             }
-        }).mount('#app')
-    </script>
+        }
+    }).mount('#app')
+</script>
 </body>
 </html>
