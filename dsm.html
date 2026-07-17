@@ -48,6 +48,10 @@
             50% { background-color: #1a0505; }
         }
     </style>
+
+    <!-- Firebase v8 -->
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
 </head>
 <body id="app" class="h-screen w-screen flex flex-col items-center justify-center stage-display relative"
       :class="[
@@ -72,78 +76,87 @@
         {{ activeMessage }}
     </div>
 
-    <script>
-        const { createApp, ref, computed, onMounted, onUnmounted } = Vue;
+<script>
+    // --- 1. INITIALIZE FIREBASE ---
+    const firebaseConfig = {
+        apiKey: "YOUR_API_KEY",
+        authDomain: "YOUR_DOMAIN.firebaseapp.com",
+        databaseURL: "https://YOUR_DATABASE_NAME.firebaseio.com",
+        projectId: "YOUR_PROJECT_ID",
+    };
+    if (!firebase.apps.length) {
+        firebase.initializeApp(firebaseConfig);
+    }
+    const db = firebase.database();
 
-        createApp({
-            setup() {
-                // --- FIREBASE PLACEHOLDERS ---
-                // Once Firebase is wired in, this endpoint will NOT have control functions.
-                // It will exclusively listen for database changes and update these variables.
+    // --- 2. GET DYNAMIC EVENT ID ---
+    const urlParams = new URLSearchParams(window.location.search);
+    const eventId = urlParams.get('event') || 'demo_sandbox';
+    const timerRef = db.ref('timers/' + eventId);
+
+    const { createApp, ref, computed, onMounted, onUnmounted } = Vue;
+
+    createApp({
+        setup() {
+            const status = ref('stopped'); 
+            const targetTimestamp = ref(0); 
+            const pausedRemaining = ref(0);
+            const now = ref(Date.now());
+            
+            const speakerName = ref('WAITING FOR CONTROL...'); 
+            const activeMessage = ref(''); 
+            
+            let ticker = null;
+
+            const remainingSeconds = computed(() => {
+                if (status.value === 'stopped') return 0;
+                if (status.value === 'paused') return pausedRemaining.value;
+                return Math.ceil((targetTimestamp.value - now.value) / 1000);
+            });
+
+            const formattedTime = computed(() => {
+                const totalSecs = remainingSeconds.value;
+                const isNegative = totalSecs < 0;
+                const absSecs = Math.abs(totalSecs);
                 
-                const status = ref('running'); // Mocked as 'running' for visual test
-                const targetTimestamp = ref(Date.now() + (300 * 1000)); // Mocked to 5 minutes
-                const pausedRemaining = ref(0);
-                const now = ref(Date.now());
-                
-                const speakerName = ref('Dave Watton'); // Mocked
-                const activeMessage = ref(''); // e.g., 'WRAP IT UP!'
-                
-                let ticker = null;
+                const hours = Math.floor(absSecs / 3600);
+                const minutes = Math.floor((absSecs % 3600) / 60);
+                const seconds = absSecs % 60;
 
-                // --- LOCAL TIME CALCULATION (Same as Master Control) ---
-                const remainingSeconds = computed(() => {
-                    if (status.value === 'stopped') return 0;
-                    if (status.value === 'paused') return pausedRemaining.value;
-                    return Math.ceil((targetTimestamp.value - now.value) / 1000);
-                });
+                let timeStr = hours > 0 
+                    ? `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+                    : `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
-                const formattedTime = computed(() => {
-                    const totalSecs = remainingSeconds.value;
-                    const isNegative = totalSecs < 0;
-                    const absSecs = Math.abs(totalSecs);
-                    
-                    const hours = Math.floor(absSecs / 3600);
-                    const minutes = Math.floor((absSecs % 3600) / 60);
-                    const seconds = absSecs % 60;
+                return isNegative ? `-${timeStr}` : timeStr;
+            });
 
-                    let timeStr = '';
-                    if (hours > 0) {
-                        timeStr = `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-                    } else {
-                        timeStr = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            onMounted(() => {
+                // THE FIREBASE LISTENER
+                // Any time the Master Control updates the DB, this triggers instantly.
+                timerRef.on('value', (snapshot) => {
+                    const data = snapshot.val();
+                    if (data) {
+                        status.value = data.status || 'stopped';
+                        targetTimestamp.value = data.targetTimestamp || 0;
+                        pausedRemaining.value = data.pausedRemaining || 0;
+                        speakerName.value = data.speakerName || '';
+                        activeMessage.value = data.activeMessage || '';
                     }
-
-                    return isNegative ? `-${timeStr}` : timeStr;
                 });
 
-                // The local ticker to keep the clock butter-smooth
-                onMounted(() => {
-                    ticker = setInterval(() => {
-                        now.value = Date.now();
-                    }, 100);
-                    
-                    /* 
-                    FIREBASE LISTENER GOES HERE:
-                    db.ref(`events/${eventId}`).on('value', (snapshot) => {
-                        const data = snapshot.val();
-                        status.value = data.status;
-                        targetTimestamp.value = data.targetTimestamp;
-                        speakerName.value = data.speakerName;
-                        activeMessage.value = data.activeMessage;
-                    });
-                    */
-                });
+                ticker = setInterval(() => { now.value = Date.now(); }, 100);
+            });
 
-                onUnmounted(() => {
-                    clearInterval(ticker);
-                });
+            onUnmounted(() => {
+                clearInterval(ticker);
+                timerRef.off(); // Kill listener to prevent memory leaks
+            });
 
-                return {
-                    status, speakerName, activeMessage, remainingSeconds, formattedTime
-                }
+            return {
+                status, speakerName, activeMessage, remainingSeconds, formattedTime
             }
-        }).mount('#app')
-    </script>
+        }
+    }).mount('#app')
+</script>
 </body>
 </html>
