@@ -1,356 +1,320 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>TimerCo Master Control | Pixel Array</title>
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&family=Inter:wght@400;600;900&display=swap');
+<!-- src/modules/TimerCo.vue -->
+<script setup>
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
+import { initializeApp, getApps } from 'firebase/app';
+import { getDatabase, ref as dbRef, set, onValue, off } from 'firebase/database';
 
-        :root {
-            --brand-bg: #000000;
-            --brand-panel: #0b0b0b;
-            --brand-raised: #1a1a1a;
-            --line-strong: rgba(255, 255, 255, 0.1);
-            --marker: #3b82f6; /* Blue for TimerCo */
-            
-            /* Timer States */
-            --time-running: #ffffff;
-            --time-warning: #eab308;
-            --time-overtime: #ef4444;
-            --time-paused: #64748b;
-        }
+// Props allow Mission Control to pass the active Event ID and toggle 2x2 Quad-View layout
+const props = defineProps({
+  eventId: { type: String, default: 'demo_sandbox' },
+  isEmbedded: { type: Boolean, default: false }
+});
 
-        body { 
-            background-color: var(--brand-bg); 
-            color: #e2e8f0; 
-            font-family: 'Inter', sans-serif;
-        }
-        
-        .panel-raised { 
-            background-color: var(--brand-raised); 
-            border: 1px solid var(--line-strong); 
-        }
+const emit = defineEmits(['timer-alert']);
 
-        /* Forces the timer to use monospace so numbers don't jump around */
-        .font-tech {
-            font-family: 'JetBrains Mono', monospace;
-            font-variant-numeric: tabular-nums;
-        }
-
-        /* Stage Display Glow Effects */
-        .stage-display {
-            transition: all 0.3s ease;
-        }
-        .state-running { color: var(--time-running); text-shadow: 0 0 40px rgba(255,255,255,0.1); }
-        .state-warning { color: var(--time-warning); text-shadow: 0 0 60px rgba(234,179,8,0.2); }
-        .state-overtime { color: var(--time-overtime); text-shadow: 0 0 60px rgba(239,68,68,0.4); animation: pulse-red 2s infinite; }
-        .state-paused { color: var(--time-paused); }
-
-        @keyframes pulse-red {
-            0%, 100% { background-color: #050505; }
-            50% { background-color: #1a0505; }
-        }
-
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
-    </style>
-
-    <!-- Firebase v8 -->
-<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
-<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
-</head>
-<body id="app" class="h-screen flex flex-col overflow-hidden">
-
-    <!-- HEADER -->
-    <header class="border-b px-8 py-4 flex justify-between items-center z-10 shadow-lg" style="background-color: var(--brand-panel); border-color: var(--line-strong);">
-        <div class="flex items-center gap-4">
-            <div class="w-3 h-3 rounded-full bg-blue-500 shadow-[0_0_10px_#3b82f6]"></div>
-            <h1 class="text-2xl font-black tracking-widest uppercase">
-                <span class="text-white">Timer</span><span style="color: var(--marker);">Co</span> // Control
-            </h1>
-        </div>
-        <div class="flex items-center gap-4">
-            <div class="text-xs font-tech text-slate-500 bg-black px-4 py-2 rounded border border-white/10 flex items-center gap-2">
-                LOCAL ENGINE <span class="w-2 h-2 rounded-full bg-emerald-500 block animate-pulse"></span>
-            </div>
-        </div>
-    </header>
-
-    <!-- MAIN GRID -->
-    <main class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 p-6 overflow-hidden">
-        
-        <!-- LEFT: CONTROLS (5 Cols) -->
-        <div class="lg:col-span-5 flex flex-col gap-6 overflow-y-auto pr-2 pb-10">
-            
-            <!-- MASTER PLAYBACK -->
-            <section class="panel-raised p-6 rounded-xl shadow-xl">
-                <h2 class="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4 border-b border-white/10 pb-2">Playback Control</h2>
-                <div class="grid grid-cols-2 gap-3 mb-3">
-                    <button @click="startTimer" :disabled="status === 'running'" 
-                            :class="status === 'running' ? 'opacity-50 cursor-not-allowed bg-emerald-900/30 text-emerald-700' : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-[0_0_15px_rgba(16,185,129,0.2)]'" 
-                            class="py-4 rounded font-black tracking-wider text-sm transition-all uppercase">
-                        Start / Resume
-                    </button>
-                    <button @click="pauseTimer" :disabled="status !== 'running'"
-                            :class="status !== 'running' ? 'opacity-50 cursor-not-allowed bg-slate-800 text-slate-600' : 'bg-yellow-600 hover:bg-yellow-500 text-white shadow-[0_0_15px_rgba(234,179,8,0.2)]'"
-                            class="py-4 rounded font-black tracking-wider text-sm transition-all uppercase">
-                        Pause
-                    </button>
-                </div>
-                <button @click="resetTimer" class="w-full py-3 bg-black border border-white/10 hover:bg-red-950/40 hover:text-red-400 hover:border-red-900/50 text-slate-400 rounded font-bold tracking-wider text-xs transition-all uppercase">
-                    Hard Reset to Zero
-                </button>
-            </section>
-
-            <!-- TIME ADJUSTMENTS -->
-            <section class="panel-raised p-6 rounded-xl shadow-xl">
-                <h2 class="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4 border-b border-white/10 pb-2">Time Adjustments (Live)</h2>
-                
-                <p class="text-[10px] text-slate-500 font-tech uppercase mb-2">Add / Subtract Time</p>
-                <div class="grid grid-cols-4 gap-2 mb-6">
-                    <button @click="adjustTime(-60)" class="py-2 bg-black border border-white/10 hover:bg-slate-800 rounded font-tech text-sm transition-colors text-slate-300">-1m</button>
-                    <button @click="adjustTime(60)" class="py-2 bg-black border border-white/10 hover:bg-slate-800 rounded font-tech text-sm transition-colors text-slate-300">+1m</button>
-                    <button @click="adjustTime(300)" class="py-2 bg-black border border-white/10 hover:bg-slate-800 rounded font-tech text-sm transition-colors text-slate-300">+5m</button>
-                    <button @click="adjustTime(600)" class="py-2 bg-black border border-white/10 hover:bg-slate-800 rounded font-tech text-sm transition-colors text-slate-300">+10m</button>
-                </div>
-
-                <p class="text-[10px] text-slate-500 font-tech uppercase mb-2">Quick Presets (Overwrites Current)</p>
-                <div class="grid grid-cols-3 gap-2">
-                    <button @click="setPreset(300)" class="py-3 bg-slate-800 hover:bg-blue-600 hover:text-white rounded font-tech font-bold text-sm transition-colors text-slate-400">5:00</button>
-                    <button @click="setPreset(900)" class="py-3 bg-slate-800 hover:bg-blue-600 hover:text-white rounded font-tech font-bold text-sm transition-colors text-slate-400">15:00</button>
-                    <button @click="setPreset(2700)" class="py-3 bg-slate-800 hover:bg-blue-600 hover:text-white rounded font-tech font-bold text-sm transition-colors text-slate-400">45:00</button>
-                </div>
-            </section>
-
-            <!-- PRESENTER MESSAGING -->
-            <section class="panel-raised p-6 rounded-xl shadow-xl flex-1">
-                <h2 class="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4 border-b border-white/10 pb-2">On-Stage Prompts</h2>
-                <div class="flex flex-col gap-3">
-                    <input type="text" v-model="speakerName" placeholder="Speaker Name (e.g. Dr. Jane Smith)" 
-                           class="w-full bg-[#050505] border border-white/10 rounded px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-500 transition-colors">
-                    
-                    <div class="relative mt-2">
-                        <textarea v-model="draftMessage" rows="3" placeholder="Type a message to flash on the confidence monitor..." 
-                                  class="w-full bg-[#050505] border border-white/10 rounded px-4 py-3 text-sm text-white focus:outline-none focus:border-yellow-500 transition-colors resize-none"></textarea>
-                        <button @click="flashMessage" :class="draftMessage ? 'bg-yellow-600 hover:bg-yellow-500 text-white' : 'bg-slate-800 text-slate-600 cursor-not-allowed'"
-                                class="absolute bottom-3 right-3 px-4 py-1.5 rounded font-bold uppercase tracking-wider text-[10px] transition-colors">
-                            Flash to Stage
-                        </button>
-                    </div>
-                    <button v-if="activeMessage" @click="clearMessage" class="mt-1 text-xs text-red-400 hover:text-red-300 text-right uppercase tracking-wider font-bold">
-                        ✕ Clear Active Message
-                    </button>
-                </div>
-            </section>
-        </div>
-
-        <!-- RIGHT: STAGE DISPLAY PREVIEW (7 Cols) -->
-        <div class="lg:col-span-7 flex flex-col h-full">
-            <div class="bg-black/50 px-6 py-3 border-t border-l border-r border-white/10 rounded-t-xl flex justify-between items-center" style="border-color: var(--line-strong);">
-                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                    <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
-                    Downstage Monitor (DSM) Preview
-                </h2>
-                
-                <!-- NEW COPY LINK BUTTON -->
-                <button @click="copyDsmLink" class="text-[10px] bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded tracking-wider font-bold transition-colors flex items-center gap-2 shadow-[0_0_10px_rgba(59,130,246,0.3)]">
-                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
-                    {{ copyText }}
-                </button>
-            </div>
-            
-            <!-- THE ACTUAL TIMER DISPLAY -->
-            <div class="panel-raised rounded-b-xl shadow-2xl flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden stage-display"
-                 :class="[
-                    status === 'running' && remainingSeconds <= 0 ? 'state-overtime' : '',
-                    status === 'running' && remainingSeconds > 0 && remainingSeconds <= 60 ? 'state-warning' : '',
-                    status === 'running' && remainingSeconds > 60 ? 'state-running' : '',
-                    status === 'paused' || status === 'stopped' ? 'state-paused' : ''
-                 ]">
-                
-                <!-- Speaker Name -->
-                <div class="absolute top-12 text-3xl font-black tracking-widest uppercase opacity-80" style="color: inherit;">
-                    {{ speakerName || 'SESSION TIMER' }}
-                </div>
-
-                <!-- Main Time (Negative formatting logic applied) -->
-                <div class="text-[12vw] font-tech font-bold leading-none tracking-tighter" style="color: inherit;">
-                    {{ formattedTime }}
-                </div>
-
-                <!-- Flashing Message -->
-                <div v-if="activeMessage" class="absolute bottom-16 bg-yellow-500 text-black px-8 py-4 rounded-xl text-4xl font-black uppercase tracking-wider shadow-[0_0_30px_rgba(234,179,8,0.5)] animate-bounce">
-                    {{ activeMessage }}
-                </div>
-
-            </div>
-        </div>
-    </main>
-
-<script>
-    // --- 1. INITIALIZE FIREBASE ---
-const firebaseConfig = {
+// --- 1. CONNECT TO YOUR EXISTING STAGETIMERCO REALTIME DB ---
+const timerFirebaseConfig = {
   apiKey: "AIzaSyAa_eku03NFVS-BuORZk-LrhHYenliOc2U",
   authDomain: "stagetimerco.firebaseapp.com",
   databaseURL: "https://stagetimerco-default-rtdb.asia-southeast1.firebasedatabase.app",
   projectId: "stagetimerco",
   storageBucket: "stagetimerco.firebasestorage.app",
   messagingSenderId: "509616370775",
-  appId: "1:509616370775:web:7e7750d74fc30c739f1f12",
-  measurementId: "G-3CE648F5GX"
+  appId: "1:509616370775:web:7e7750d74fc30c739f1f12"
 };
-    if (!firebase.apps.length) {
-        firebase.initializeApp(firebaseConfig);
+
+// Initialize as a named secondary Firebase app so it never clashes with your Auth Firebase app!
+const timerApp = getApps().find(a => a.name === 'timerCoApp') || initializeApp(timerFirebaseConfig, 'timerCoApp');
+const rtdb = getDatabase(timerApp);
+
+// --- 2. REACTIVE TIMER STATE ---
+const status = ref('stopped');
+const targetTimestamp = ref(0);
+const pausedRemaining = ref(0);
+const now = ref(Date.now());
+
+const speakerName = ref('');
+const draftMessage = ref('');
+const activeMessage = ref('');
+const copyText = ref('COPY DSM LINK');
+
+let ticker = null;
+let activeTimerRef = null;
+let lastAlertedSecond = null;
+
+// --- 3. CLOUD SYNC ENGINE (Refresh-Safe!) ---
+const syncToCloud = () => {
+  if (!activeTimerRef) return;
+  set(activeTimerRef, {
+    status: status.value,
+    targetTimestamp: targetTimestamp.value,
+    pausedRemaining: pausedRemaining.value,
+    speakerName: speakerName.value,
+    activeMessage: activeMessage.value
+  });
+};
+
+const connectToEventRoom = (evtId) => {
+  if (activeTimerRef) off(activeTimerRef);
+  activeTimerRef = dbRef(rtdb, `timers/${evtId}`);
+
+  // Listen to existing DB state first (prevents F5 refresh from wiping a live show!)
+  onValue(activeTimerRef, (snapshot) => {
+    const data = snapshot.val();
+    if (data) {
+      status.value = data.status || 'stopped';
+      targetTimestamp.value = data.targetTimestamp || 0;
+      pausedRemaining.value = data.pausedRemaining || 0;
+      speakerName.value = data.speakerName || '';
+      activeMessage.value = data.activeMessage || '';
     }
-    const db = firebase.database();
+  });
+};
 
-    // --- 2. GET DYNAMIC EVENT ID ---
-    const urlParams = new URLSearchParams(window.location.search);
-    const eventId = urlParams.get('event') || 'demo_sandbox';
-    const timerRef = db.ref('timers/' + eventId);
+watch(() => props.eventId, (newId) => {
+  connectToEventRoom(newId || 'demo_sandbox');
+}, { immediate: true });
 
-    const { createApp, ref, computed, onMounted, onUnmounted, watch } = Vue;
+// --- 4. TIME & OVERTIME MATH ---
+const remainingSeconds = computed(() => {
+  if (status.value === 'stopped') return 0;
+  if (status.value === 'paused') return pausedRemaining.value;
+  return Math.ceil((targetTimestamp.value - now.value) / 1000);
+});
 
-    createApp({
-        setup() {
-            const status = ref('stopped'); 
-            const targetTimestamp = ref(0); 
-            const pausedRemaining = ref(0); 
-            const now = ref(Date.now());
-            
-            const speakerName = ref('');
-            const draftMessage = ref('');
-            const activeMessage = ref('');
-            
-            const copyText = ref('COPY DSM LINK');
-            let ticker = null;
+const formattedTime = computed(() => {
+  const totalSecs = remainingSeconds.value;
+  const isNegative = totalSecs < 0;
+  const absSecs = Math.abs(totalSecs);
 
-            // --- THE SYNC ENGINE ---
-            // This blasts the current state to the cloud
-            const syncToCloud = () => {
-                timerRef.set({
-                    status: status.value,
-                    targetTimestamp: targetTimestamp.value,
-                    pausedRemaining: pausedRemaining.value,
-                    speakerName: speakerName.value,
-                    activeMessage: activeMessage.value
-                });
-            };
+  const hours = Math.floor(absSecs / 3600);
+  const minutes = Math.floor((absSecs % 3600) / 60);
+  const seconds = absSecs % 60;
 
-            // Watch for changes in the speaker name and sync automatically
-            watch(speakerName, () => { syncToCloud(); });
+  const timeStr = hours > 0
+    ? `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+    : `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
-            const remainingSeconds = computed(() => {
-                if (status.value === 'stopped') return 0;
-                if (status.value === 'paused') return pausedRemaining.value;
-                return Math.ceil((targetTimestamp.value - now.value) / 1000);
-            });
+  return isNegative ? `-${timeStr}` : timeStr;
+});
 
-            const formattedTime = computed(() => {
-                const totalSecs = remainingSeconds.value;
-                const isNegative = totalSecs < 0;
-                const absSecs = Math.abs(totalSecs);
-                
-                const hours = Math.floor(absSecs / 3600);
-                const minutes = Math.floor((absSecs % 3600) / 60);
-                const seconds = absSecs % 60;
+// Fire cross-app alerts to SignalCo when hitting 60s warning or 0s overtime
+watch(remainingSeconds, (sec) => {
+  if (status.value !== 'running') return;
+  if (sec === 60 && lastAlertedSecond !== 60) {
+    lastAlertedSecond = 60;
+    emit('timer-alert', { level: 'warn', msg: `⚠️ TIMERCO: 1 Minute Remaining (${speakerName.value || 'Session'})` });
+  } else if (sec === 0 && lastAlertedSecond !== 0) {
+    lastAlertedSecond = 0;
+    emit('timer-alert', { level: 'crit', msg: `🚨 TIMERCO: Speaker is OVERTIME (${speakerName.value || 'Session'})` });
+  }
+});
 
-                let timeStr = hours > 0 
-                    ? `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
-                    : `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+// --- 5. OPERATOR CONTROLS ---
+const startTimer = () => {
+  if (status.value === 'running') return;
+  if (status.value === 'paused') {
+    targetTimestamp.value = Date.now() + (pausedRemaining.value * 1000);
+  } else if (targetTimestamp.value === 0) {
+    targetTimestamp.value = Date.now() + (300 * 1000);
+  }
+  status.value = 'running';
+  syncToCloud();
+};
 
-                return isNegative ? `-${timeStr}` : timeStr;
-            });
+const pauseTimer = () => {
+  if (status.value !== 'running') return;
+  pausedRemaining.value = remainingSeconds.value;
+  status.value = 'paused';
+  syncToCloud();
+};
 
-            // --- CONTROLS (Updated with syncToCloud) ---
-            const startTimer = () => {
-                if (status.value === 'running') return;
-                if (status.value === 'paused') {
-                    targetTimestamp.value = Date.now() + (pausedRemaining.value * 1000);
-                } else if (targetTimestamp.value === 0) {
-                    targetTimestamp.value = Date.now() + (300 * 1000);
-                }
-                status.value = 'running';
-                syncToCloud();
-            };
+const resetTimer = () => {
+  status.value = 'stopped';
+  targetTimestamp.value = 0;
+  pausedRemaining.value = 0;
+  lastAlertedSecond = null;
+  syncToCloud();
+};
 
-            const pauseTimer = () => {
-                if (status.value !== 'running') return;
-                pausedRemaining.value = remainingSeconds.value;
-                status.value = 'paused';
-                syncToCloud();
-            };
+const adjustTime = (secondsToAdd) => {
+  if (status.value === 'running') {
+    targetTimestamp.value += (secondsToAdd * 1000);
+  } else {
+    const current = status.value === 'paused' ? pausedRemaining.value : 0;
+    pausedRemaining.value = Math.max(0, current + secondsToAdd);
+    status.value = 'paused';
+  }
+  syncToCloud();
+};
 
-            const resetTimer = () => {
-                status.value = 'stopped';
-                targetTimestamp.value = 0;
-                pausedRemaining.value = 0;
-                syncToCloud();
-            };
+const setPreset = (totalSeconds) => {
+  lastAlertedSecond = null;
+  if (status.value === 'running') {
+    targetTimestamp.value = Date.now() + (totalSeconds * 1000);
+  } else {
+    pausedRemaining.value = totalSeconds;
+    status.value = 'paused';
+  }
+  syncToCloud();
+};
 
-            const adjustTime = (secondsToAdd) => {
-                if (status.value === 'running') {
-                    targetTimestamp.value += (secondsToAdd * 1000);
-                } else {
-                    const current = status.value === 'paused' ? pausedRemaining.value : 0;
-                    pausedRemaining.value = Math.max(0, current + secondsToAdd);
-                    status.value = 'paused'; 
-                }
-                syncToCloud();
-            };
+const flashMessage = () => {
+  if (!draftMessage.value.trim()) return;
+  activeMessage.value = draftMessage.value;
+  draftMessage.value = '';
+  syncToCloud();
+};
 
-            const setPreset = (totalSeconds) => {
-                if (status.value === 'running') {
-                    targetTimestamp.value = Date.now() + (totalSeconds * 1000);
-                } else {
-                    pausedRemaining.value = totalSeconds;
-                    status.value = 'paused';
-                }
-                syncToCloud();
-            };
+const clearMessage = () => {
+  activeMessage.value = '';
+  syncToCloud();
+};
 
-            const flashMessage = () => {
-                if (!draftMessage.value.trim()) return;
-                activeMessage.value = draftMessage.value;
-                draftMessage.value = '';
-                syncToCloud();
-            };
+const copyDsmLink = () => {
+  const stagingUrl = `${window.location.origin}/dsm.html?event=${props.eventId}`;
+  navigator.clipboard.writeText(stagingUrl).then(() => {
+    copyText.value = 'COPIED!';
+    setTimeout(() => { copyText.value = 'COPY DSM LINK'; }, 2000);
+  });
+};
 
-            const clearMessage = () => {
-                activeMessage.value = '';
-                syncToCloud();
-            };
+const popOutDsmWindow = () => {
+  window.open(`/dsm.html?event=${props.eventId}`, '_blank', 'width=1280,height=720');
+};
 
-            const copyDsmLink = () => {
-                // Dynamically grabs the current domain and event ID
-                const currentDomain = window.location.origin + window.location.pathname.replace('timer.html', '');
-                const stagingUrl = `${currentDomain}dsm.html?event=${eventId}`;
-                
-                navigator.clipboard.writeText(stagingUrl).then(() => {
-                    copyText.value = 'COPIED!';
-                    setTimeout(() => { copyText.value = 'COPY DSM LINK'; }, 2000);
-                });
-            };
+onMounted(() => {
+  ticker = setInterval(() => { now.value = Date.now(); }, 100);
+});
 
-            onMounted(() => {
-                // Ensure a clean slate in the DB when the master boots up
-                syncToCloud();
-                ticker = setInterval(() => { now.value = Date.now(); }, 100);
-            });
-
-            onUnmounted(() => { clearInterval(ticker); });
-
-            return {
-                status, speakerName, draftMessage, activeMessage,
-                remainingSeconds, formattedTime, copyText,
-                startTimer, pauseTimer, resetTimer, adjustTime, setPreset,
-                flashMessage, clearMessage, copyDsmLink
-            }
-        }
-    }).mount('#app')
+onUnmounted(() => {
+  clearInterval(ticker);
+  if (activeTimerRef) off(activeTimerRef);
+});
 </script>
-</body>
-</html>
+
+<template>
+  <div class="h-full w-full flex flex-col bg-black text-slate-200 overflow-hidden select-none">
+    <!-- HEADER (Hidden or compact when embedded in 2x2 Quad-View) -->
+    <header class="border-b border-white/10 px-5 py-2.5 flex justify-between items-center bg-[#0b0b0b] shrink-0">
+      <div class="flex items-center gap-3">
+        <div class="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-[0_0_10px_#3b82f6]"></div>
+        <h1 class="font-black tracking-widest uppercase" :class="isEmbedded ? 'text-xs' : 'text-lg'">
+          <span class="text-white">Timer</span><span class="text-blue-500">Co</span>
+          <span class="text-slate-500 text-xs ml-2 font-mono">// {{ eventId }}</span>
+        </h1>
+      </div>
+      <div class="flex items-center gap-2">
+        <button @click="copyDsmLink" class="text-[10px] bg-blue-600 hover:bg-blue-500 text-white px-2.5 py-1 rounded font-bold tracking-wider transition">
+          {{ copyText }}
+        </button>
+        <button @click="popOutDsmWindow" class="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 py-1 rounded font-bold border border-white/10 transition">
+          ↗ POP-OUT DSM
+        </button>
+      </div>
+    </header>
+
+    <!-- MAIN CONTENT GRID -->
+    <main class="flex-1 grid gap-4 p-4 overflow-hidden min-h-0" :class="isEmbedded ? 'grid-cols-12' : 'grid-cols-1 lg:grid-cols-12 p-6 gap-6'">
+      
+      <!-- LEFT CONTROLS -->
+      <div class="col-span-5 flex flex-col gap-3 overflow-y-auto pr-1 min-h-0">
+        <!-- Playback -->
+        <section class="panel-raised p-4 rounded-xl">
+          <div class="grid grid-cols-2 gap-2 mb-2">
+            <button @click="startTimer" :disabled="status === 'running'"
+                    :class="status === 'running' ? 'opacity-40 cursor-not-allowed bg-emerald-900/30 text-emerald-600' : 'bg-emerald-600 hover:bg-emerald-500 text-white'"
+                    class="py-2.5 rounded font-black tracking-wider text-xs uppercase transition">
+              Start / Resume
+            </button>
+            <button @click="pauseTimer" :disabled="status !== 'running'"
+                    :class="status !== 'running' ? 'opacity-40 cursor-not-allowed bg-slate-800 text-slate-600' : 'bg-yellow-600 hover:bg-yellow-500 text-white'"
+                    class="py-2.5 rounded font-black tracking-wider text-xs uppercase transition">
+              Pause
+            </button>
+          </div>
+          <button @click="resetTimer" class="w-full py-1.5 bg-black border border-white/10 hover:bg-red-950/40 hover:text-red-400 text-slate-400 rounded font-bold text-[11px] uppercase transition">
+            Hard Reset to Zero
+          </button>
+        </section>
+
+        <!-- Time Adjustments & Presets -->
+        <section class="panel-raised p-4 rounded-xl">
+          <div class="grid grid-cols-4 gap-1.5 mb-3">
+            <button @click="adjustTime(-60)" class="py-1.5 bg-black border border-white/10 hover:bg-slate-800 rounded font-tech text-xs text-slate-300">-1m</button>
+            <button @click="adjustTime(60)" class="py-1.5 bg-black border border-white/10 hover:bg-slate-800 rounded font-tech text-xs text-slate-300">+1m</button>
+            <button @click="adjustTime(300)" class="py-1.5 bg-black border border-white/10 hover:bg-slate-800 rounded font-tech text-xs text-slate-300">+5m</button>
+            <button @click="adjustTime(600)" class="py-1.5 bg-black border border-white/10 hover:bg-slate-800 rounded font-tech text-xs text-slate-300">+10m</button>
+          </div>
+          <div class="grid grid-cols-3 gap-1.5">
+            <button @click="setPreset(300)" class="py-2 bg-slate-800 hover:bg-blue-600 hover:text-white rounded font-tech font-bold text-xs text-slate-300">5:00</button>
+            <button @click="setPreset(900)" class="py-2 bg-slate-800 hover:bg-blue-600 hover:text-white rounded font-tech font-bold text-xs text-slate-300">15:00</button>
+            <button @click="setPreset(2700)" class="py-2 bg-slate-800 hover:bg-blue-600 hover:text-white rounded font-tech font-bold text-xs text-slate-300">45:00</button>
+          </div>
+        </section>
+
+        <!-- Speaker & Stage Messaging -->
+        <section class="panel-raised p-4 rounded-xl flex-1 flex flex-col gap-2">
+          <input type="text" v-model="speakerName" @change="syncToCloud" placeholder="Speaker Name (e.g. Dr. Jane Smith)"
+                 class="w-full bg-[#050505] border border-white/10 rounded px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500">
+          <div class="relative flex-1 flex flex-col">
+            <textarea v-model="draftMessage" rows="2" placeholder="Flash message on DSM..."
+                      class="w-full flex-1 bg-[#050505] border border-white/10 rounded px-3 py-2 text-xs text-white focus:outline-none focus:border-yellow-500 resize-none"></textarea>
+            <div class="flex justify-between items-center mt-2">
+              <button v-if="activeMessage" @click="clearMessage" class="text-[10px] text-red-400 hover:text-red-300 uppercase font-bold">
+                ✕ Clear Active Alert
+              </button>
+              <span v-else></span>
+              <button @click="flashMessage" :class="draftMessage ? 'bg-yellow-600 hover:bg-yellow-500 text-white' : 'bg-slate-800 text-slate-600 cursor-not-allowed'"
+                      class="px-3 py-1 rounded font-bold uppercase text-[10px] transition">
+                Flash to Stage
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- RIGHT LIVE DSM PREVIEW -->
+      <div class="col-span-7 flex flex-col h-full min-h-0">
+        <div class="panel-raised rounded-xl shadow-2xl flex-1 flex flex-col items-center justify-center p-6 relative overflow-hidden stage-display"
+             :class="[
+               status === 'running' && remainingSeconds <= 0 ? 'state-overtime' : '',
+               status === 'running' && remainingSeconds > 0 && remainingSeconds <= 60 ? 'state-warning' : '',
+               status === 'running' && remainingSeconds > 60 ? 'state-running' : '',
+               status === 'paused' || status === 'stopped' ? 'state-paused' : ''
+             ]">
+          <div class="absolute top-6 font-black tracking-widest uppercase opacity-80 text-center px-4 truncate max-w-full"
+               :class="isEmbedded ? 'text-sm top-4' : 'text-2xl top-10'">
+            {{ speakerName || 'SESSION TIMER' }}
+          </div>
+
+          <div class="font-tech font-bold leading-none tracking-tighter"
+               :class="isEmbedded ? 'text-6xl xl:text-7xl' : 'text-[10vw]'">
+            {{ formattedTime }}
+          </div>
+
+          <div v-if="activeMessage"
+               class="absolute bottom-6 bg-yellow-500 text-black px-5 py-2 rounded-xl font-black uppercase tracking-wider shadow-[0_0_30px_rgba(234,179,8,0.5)] animate-bounce text-center max-w-[90%]"
+               :class="isEmbedded ? 'text-xs bottom-3' : 'text-2xl bottom-12'">
+            {{ activeMessage }}
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</template>
+
+<style scoped>
+.panel-raised { background-color: #1a1a1a; border: 1px solid rgba(255, 255, 255, 0.1); }
+.font-tech { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+.stage-display { transition: all 0.3s ease; }
+.state-running { color: #ffffff; text-shadow: 0 0 40px rgba(255,255,255,0.1); }
+.state-warning { color: #eab308; text-shadow: 0 0 60px rgba(234,179,8,0.2); }
+.state-overtime { color: #ef4444; text-shadow: 0 0 60px rgba(239,68,68,0.4); animation: pulse-red 2s infinite; }
+.state-paused { color: #64748b; }
+@keyframes pulse-red {
+  0%, 100% { background-color: #050505; }
+  50% { background-color: #1a0505; }
+}
+</style>
